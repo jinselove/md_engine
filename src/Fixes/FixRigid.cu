@@ -17,7 +17,7 @@ FixRigid::FixRigid(boost::shared_ptr<State> state_, std::string handle_, std::st
     TIP4P = false;
     TIP3P = false;
     printing = false;
-    requiresPostNVE_V = true;
+    //requiresPostNVE_V = true;
     style = "DEFAULT";
 }
 
@@ -431,7 +431,7 @@ __global__ void set_init_vel_correction(int4 *waterIds, float4 *dvs_0, int nMole
   }
 }
 
-template <class DATA, bool DEBUG_BOOL>
+template <class DATA, bool halfStep, bool DEBUG_BOOL>
 __global__ void settleVelocities(int4 *waterIds, float4 *xs, float4 *xs_0, 
                                float4 *vs, float4 *vs_0, float4 *dvs_0, 
                                float4 *fs, float4 *fs_0, float4 *comOld, 
@@ -449,38 +449,6 @@ __global__ void settleVelocities(int4 *waterIds, float4 *xs, float4 *xs_0,
         int idxH1= idToIdxs[atomsFromMolecule.y];
         int idxH2= idToIdxs[atomsFromMolecule.z];
         
-        // extract the whole positions
-        float4 posO_whole = xs[idxO];
-        float4 posH1_whole= xs[idxH1];
-        float4 posH2_whole= xs[idxH2];
-
-        // and the unconstrained, updated positions
-        float3 posO = make_float3(posO_whole);
-        float3 posH1= make_float3(posH1_whole);
-        float3 posH2= make_float3(posH2_whole);
-
-        float3 a_pos = posO;
-        float3 b_pos = posO + bounds.minImage( (posH1 - posO) );
-        float3 c_pos = posO + bounds.minImage( (posH2 - posO) );
-
-        // note that a_pos, b_pos, c_pos are already minimum image vectors...
-        float3 e_AB = b_pos - a_pos;
-        float3 e_BC = c_pos - b_pos;
-        float3 e_CA = a_pos - c_pos;
-
-        // make them unit vectors by dividing by their length
-        float inv_len_AB = 1.0 / (length(e_AB));
-        float inv_len_BC = 1.0 / (length(e_BC));
-        float inv_len_CA = 1.0 / (length(e_CA));
-
-        e_AB *= inv_len_AB;
-        e_BC *= inv_len_BC;
-        e_CA *= inv_len_CA;
-
-        float cosA = dot(-e_AB,e_CA);
-        float cosB = dot(-e_BC,e_AB);
-        float cosC = dot(-e_CA,e_BC);
-
         float4 velO_whole = vs[idxO];
         float4 velH1_whole= vs[idxH1];
         float4 velH2_whole= vs[idxH2];
@@ -490,76 +458,134 @@ __global__ void settleVelocities(int4 *waterIds, float4 *xs, float4 *xs_0,
         float3 velH1= make_float3(velH1_whole);
         float3 velH2= make_float3(velH2_whole);
 
-        // and get the pertinent dot products
-        float3 vel0_AB = velH1 - velO;
-        float3 vel0_BC = velH2 - velH1;
-        float3 vel0_CA = velO - velH2;
-
-        float v0_AB = dot(e_AB, vel0_AB);
-        float v0_BC = dot(e_BC, vel0_BC);
-        float v0_CA = dot(e_CA, vel0_CA);
-
-        double4 weights = fixRigidData.weights;
-        float ma = (float) weights.z;
-        float mb = (float) weights.w;
-        float mamb = ma + mb;
-        float mambSqr = mamb * mamb;
-
-        // exactly as in Miyamoto
-        // --- except, since all three are /divided/ by d, and then later multiplied by dt
-        //     for numerical precision, we just don't involve the timestep dt.
-        float d = ( (2.0 * mambSqr) + ( 2.0 * ma * mb * cosA * cosB * cosC) - (2.0 * mb * mb * cosA * cosA) - 
-                    ( ( ma * mamb) * ((cosB * cosB) + (cosC * cosC)) ) ) / (2.0 * mb);
-
-        float tau_AB = ma * ( (v0_AB * (2.0*mamb - (ma * cosC * cosC))) +
-                              (v0_BC * ((mb * cosC * cosA) - (mamb * cosB)) ) + 
-                              (v0_CA * (ma * cosB * cosC - (2.0 * mb * cosA) ) ) ) / d;
-
-        float tau_BC = ( (v0_BC * ( ( mambSqr - (mb * mb * cosA * cosA) ) )) + 
-                         (v0_CA * ma * ((mb * cosA * cosB) - (mamb * cosC ) ) ) + 
-                         (v0_AB * ma * ((mb * cosC * cosA) - (mamb * cosB) ) ) ) / d;
-
-        float tau_CA = ma * ( (v0_CA * ((2.0 * mamb) - (ma * cosB * cosB) )) + 
-                              (v0_AB * ((ma * cosB * cosC) - (2.0 * mb * cosA) )) + 
-                              (v0_BC * ((mb * cosA * cosB) - (mamb * cosC) )) ) / d;
-
-        float3 g_AB = e_AB * tau_AB;
-        float3 g_BC = e_BC * tau_BC;
-        float3 g_CA = e_CA * tau_CA;
+        if (HALFSTEP) {
+            
+            float3 constraints_dvO = make_float3(dvs_0[idx*3]);
+            float3 constraints_dvH1= make_float3(dvs_0[idx*3 + 1]);
+            float3 constraints_dvH2= make_float3(dvs_0[idx*3 + 2]);
+            //= constraints_dvO;
+            //dvs_0[idx*3 + 1] = constraints_dvH1;
+            //dvs_0[idx*3 + 2] = constraints_dvH2;
 
 
-        // all data required to compute tau_AB etc. are in fixRigidData... do the algebra here
-        /*
-        double tau_AB = (v0_AB * fixRigidData.tauAB1) + 
-                        (v0_BC * fixRigidData.tauAB2) + 
-                        (v0_BC * fixRigidData.tauAB3);
+        } else {
+        // extract the whole positions
+            float4 posO_whole = xs[idxO];
+            float4 posH1_whole= xs[idxH1];
+            float4 posH2_whole= xs[idxH2];
 
-        double tau_BC = (v0_BC * fixRigidData.tauBC1) + 
-                        (v0_CA * fixRigidData.tauBC2) + 
-                        (v0_AB * fixRigidData.tauBC3);
+            // and the unconstrained, updated positions
+            float3 posO = make_float3(posO_whole);
+            float3 posH1= make_float3(posH1_whole);
+            float3 posH2= make_float3(posH2_whole);
 
-        double tau_CA = (v0_CA * fixRigidData.tauCA1) + 
-                        (v0_AB * fixRigidData.tauCA2) + 
-                        (v0_BC * fixRigidData.tauCA3);
-        */
-        // we have now computed our lagrange multipliers, and can add these to our velO, 
-        // velH1, velH2 vectors.
-        float3 constraints_dvO = 0.5 * (velO_whole.w) * ( (g_AB) - (g_CA) );
-        float3 constraints_dvH1= 0.5 * (velH1_whole.w)* ( (g_BC) - (g_AB) );
-        float3 constraints_dvH2= 0.5 * (velH2_whole.w)* ( (g_CA) - (g_BC) );
+            float3 a_pos = posO;
+            float3 b_pos = posO + bounds.minImage( (posH1 - posO) );
+            float3 c_pos = posO + bounds.minImage( (posH2 - posO) );
+
+            // note that a_pos, b_pos, c_pos are already minimum image vectors...
+            float3 e_AB = b_pos - a_pos;
+            float3 e_BC = c_pos - b_pos;
+            float3 e_CA = a_pos - c_pos;
+
+            // make them unit vectors by dividing by their length
+            float inv_len_AB = 1.0 / (length(e_AB));
+            float inv_len_BC = 1.0 / (length(e_BC));
+            float inv_len_CA = 1.0 / (length(e_CA));
+
+            e_AB *= inv_len_AB;
+            e_BC *= inv_len_BC;
+            e_CA *= inv_len_CA;
+
+            float cosA = dot(-e_AB,e_CA);
+            float cosB = dot(-e_BC,e_AB);
+            float cosC = dot(-e_CA,e_BC);
+
+            float4 velO_whole = vs[idxO];
+            float4 velH1_whole= vs[idxH1];
+            float4 velH2_whole= vs[idxH2];
+
+            // grab the global velocities; these are our v0_a, v0_b, v0_c variables
+            float3 velO = make_float3(velO_whole);
+            float3 velH1= make_float3(velH1_whole);
+            float3 velH2= make_float3(velH2_whole);
+
+            // and get the pertinent dot products
+            float3 vel0_AB = velH1 - velO;
+            float3 vel0_BC = velH2 - velH1;
+            float3 vel0_CA = velO - velH2;
+
+            float v0_AB = dot(e_AB, vel0_AB);
+            float v0_BC = dot(e_BC, vel0_BC);
+            float v0_CA = dot(e_CA, vel0_CA);
+
+            double4 weights = fixRigidData.weights;
+            float ma = (float) weights.z;
+            float mb = (float) weights.w;
+            float mamb = ma + mb;
+            float mambSqr = mamb * mamb;
+
+            // exactly as in Miyamoto
+            // --- except, since all three are /divided/ by d, and then later multiplied by dt
+            //     for numerical precision, we just don't involve the timestep dt.
+            float d = ( (2.0 * mambSqr) + ( 2.0 * ma * mb * cosA * cosB * cosC) - (2.0 * mb * mb * cosA * cosA) - 
+                        ( ( ma * mamb) * ((cosB * cosB) + (cosC * cosC)) ) ) / (2.0 * mb);
+
+            float tau_AB = ma * ( (v0_AB * (2.0*mamb - (ma * cosC * cosC))) +
+                                  (v0_BC * ((mb * cosC * cosA) - (mamb * cosB)) ) + 
+                                  (v0_CA * (ma * cosB * cosC - (2.0 * mb * cosA) ) ) ) / d;
+
+            float tau_BC = ( (v0_BC * ( ( mambSqr - (mb * mb * cosA * cosA) ) )) + 
+                             (v0_CA * ma * ((mb * cosA * cosB) - (mamb * cosC ) ) ) + 
+                             (v0_AB * ma * ((mb * cosC * cosA) - (mamb * cosB) ) ) ) / d;
+
+            float tau_CA = ma * ( (v0_CA * ((2.0 * mamb) - (ma * cosB * cosB) )) + 
+                                  (v0_AB * ((ma * cosB * cosC) - (2.0 * mb * cosA) )) + 
+                                  (v0_BC * ((mb * cosA * cosB) - (mamb * cosC) )) ) / d;
+
+            float3 g_AB = e_AB * tau_AB;
+            float3 g_BC = e_BC * tau_BC;
+            float3 g_CA = e_CA * tau_CA;
+
+
+            // all data required to compute tau_AB etc. are in fixRigidData... do the algebra here
+            /*
+            double tau_AB = (v0_AB * fixRigidData.tauAB1) + 
+                            (v0_BC * fixRigidData.tauAB2) + 
+                            (v0_BC * fixRigidData.tauAB3);
+
+            double tau_BC = (v0_BC * fixRigidData.tauBC1) + 
+                            (v0_CA * fixRigidData.tauBC2) + 
+                            (v0_AB * fixRigidData.tauBC3);
+
+            double tau_CA = (v0_CA * fixRigidData.tauCA1) + 
+                            (v0_AB * fixRigidData.tauCA2) + 
+                            (v0_BC * fixRigidData.tauCA3);
+            */
+            // we have now computed our lagrange multipliers, and can add these to our velO, 
+            // velH1, velH2 vectors.
+            float3 constraints_dvO = 0.5 * (velO_whole.w) * ( (g_AB) - (g_CA) );
+            float3 constraints_dvH1= 0.5 * (velH1_whole.w)* ( (g_BC) - (g_AB) );
+            float3 constraints_dvH2= 0.5 * (velH2_whole.w)* ( (g_CA) - (g_BC) );
         
-        velO_whole += constraints_dvO;
-        velH1_whole+= constraints_dvH1;
-        velH2_whole+= constraints_dvH2;
-        // add the float3 differential velocity vectors
+            // save our constraint velocity correction
+            dvs_0[idx*3] = make_float4(constraints_dvO.x, constraints_dvO.y, constraints_dvO.z, 0);
+            dvs_0[idx*3 + 1] = make_float4(constraints_dvH1.x, constraints_dvH1.y, constraints_dvH2.z, 0);
+            dvs_0[idx*3 + 2] = make_float4(constraints_dvH2.x, constraints_dvH2.y, constraints_dvH2.z, 0);
 
-        // and assign the new vectors to global memory
-        vs[idxO] = velO_whole;
-        vs[idxH1]= velH1_whole;
-        vs[idxH2]= velH2_whole;
-        
+            velO_whole += constraints_dvO;
+            velH1_whole+= constraints_dvH1;
+            velH2_whole+= constraints_dvH2;
+            // add the float3 differential velocity vectors
 
-        return;
+            // and assign the new vectors to global memory
+            vs[idxO] = velO_whole;
+            vs[idxH1]= velH1_whole;
+            vs[idxH2]= velH2_whole;
+            
+
+            return;
+        }
     }
 }
 
@@ -830,6 +856,15 @@ __global__ void settlePositions(int4 *waterIds, float4 *xs, float4 *xs_0,
     }
 }
 
+int FixRigid::removeNDOF() {
+    int nMolecules = 0;
+
+    if (TIP4P) {
+        // the M-site contributes zero DOF - but it was counted as 3
+        // Moreover, we have 3 constraints (the sides of the triangle) for the non-virtual sites
+        // so, 3 * 4 = 12 original DOF, less 3 for M-site, less 3 for regular bond constraints
+}
+
 // 
 void FixRigid::populateRigidData() {
     // so at this point we have populated canonicalTriangle and sideLengths, which hold
@@ -934,6 +969,7 @@ void FixRigid::populateRigidData() {
 
 }
 
+/*
 bool FixRigid::postNVE_V() {
 
     float dt = state->dt;
@@ -953,10 +989,9 @@ bool FixRigid::postNVE_V() {
                                                 dvs_0.data(), gpd.fs(activeIdx), fs_0.data(), 
                                                 com.data(), fixRigidData, nMolecules, dt, dtf, 
                                                 gpd.idToIdxs.d_data.data(), bounds);
-
     return true;
 }
-
+*/
 void FixRigid::handleBoundsChange() {
 
     if (TIP4P) {

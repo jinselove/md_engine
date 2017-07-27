@@ -266,7 +266,8 @@ public:
 
     void setVirialTurnPrepare();
     void setVirialTurn();
-
+    
+    virtual int removeNDOF() {return 0;}; //!< A fix removes NDOF
     virtual Interpolator *getInterpolator(std::string);
 
     virtual void updateForPIMD(int nPerRingPoly) {};
