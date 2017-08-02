@@ -857,12 +857,7 @@ __global__ void settlePositions(int4 *waterIds, float4 *xs, float4 *xs_0,
 }
 
 int FixRigid::removeNDOF() {
-    int nMolecules = 0;
 
-    if (TIP4P) {
-        // the M-site contributes zero DOF - but it was counted as 3
-        // Moreover, we have 3 constraints (the sides of the triangle) for the non-virtual sites
-        // so, 3 * 4 = 12 original DOF, less 3 for M-site, less 3 for regular bond constraints
 }
 
 // 

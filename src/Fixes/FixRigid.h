@@ -184,7 +184,7 @@ class FixRigid : public Fix {
         //! Removes NDOF corresponding to the number of water molecules in the fix
         int removeNDOF();
 
-        //! Create a rigid constraint on a TIP3P water molecule
+        // Create a rigid constraint on a TIP3P water molecule
         /*!
          * \ param id_a The atom id in the simulation state of the Oxygen atom in TIP3P
          * \ param id_b The atom id in the simulation state of a Hydrogen atom in TIP3P
